@@ -8,48 +8,129 @@ import fitz
 from google import genai
 from google.genai import types
 
+
 MODEL_NAME = 'gemini-3-pro-preview'
 SYSTEM_PROMPT = """
-Você é um analista legislativo e especialista em comunicação cívica.
-Sua tarefa é analisar um Projeto de Lei (PL) e extrair metadados semânticos.
-Analise o texto completo para extrair resumo, justificativa e evidências (XAI).
+Você é um especialista em Linguagem Simples (Plain Language) e comunicação legislativa voltada ao cidadão comum.
+Sua missão é traduzir Projetos de Lei (PLs) da Câmara Municipal de Porto Alegre, removendo todo o "juridiquês" e focando no impacto prático na vida das pessoas.
+
+DIRETRIZES DE REDAÇÃO:
+1. Início Direto: JAMAIS comece frases com "O projeto propõe", "A lei visa", "Trata-se de" ou "O texto diz". Comece diretamente com a ação.
+   - Errado: "O projeto cria um auxílio..."
+   - Certo: "Cria um auxílio financeiro..."
+2. Tradução Radical: Nunca use termos como "revoga", "inciso", "dotação" ou "tramitação". Use "cancela", "regra", "dinheiro" e "status".
+3. Neutralidade: Você explica, não opina. Atribua a justificativa ao autor ("Segundo o autor...").
+4. Foco no Usuário: A pergunta principal a responder é: "O que muda na minha vida amanhã se isso for aprovado?".
+5. Rastreabilidade: Para cada ponto levantado, extraia os trechos exatos do texto original que servem de evidência.
+
+Se o projeto for apenas uma homenagem, nome de rua ou data comemorativa, deixe isso claro e seja breve.
 """
 
 LEGISLATION_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'resumo': {'type': 'string'},
-        'justificativa': {'type': 'string'},
-        'evidencias': {
-            'type': 'array',
-            'items': {
-                'type': 'object',
-                'properties': {
-                    'ponto_resumo': {'type': 'string'},
-                    'citacao_original': {'type': 'string'},
+    "type": "object",
+    "properties": {
+        "titulo": {
+            "type": "string",
+            "description": "Título curto e chamativo (máx 10 palavras) explicando o projeto. Ex: 'Proibição de fogos de artifício com ruído'.",
+        },
+        "resumo": {
+            "type": "string",
+            "description": "Uma única frase simples explicando o objetivo central. Comece diretamente com o verbo (ex: 'Cria', 'Proíbe', 'Autoriza'), sem citar 'o projeto'.",        },
+        "mudancas": {
+            "type": "array",
+            "description": "Lista de mudanças práticas propostas pelo projeto.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "texto_simplificado": {
+                        "type": "string",
+                        "description": "A mudança explicada em linguagem simples. Ex: 'A multa passa a ser R$ 200'."
+                    },
+                    "trechos_originais": {
+                        "type": "array",
+                        "description": "Lista de strings contendo os trechos exatos da lei que fundamentam essa mudança (sem uso de [...]).",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
                 },
-                'required': ['ponto_resumo', 'citacao_original'],
+                "required": ["texto_simplificado", "trechos_originais"]
             },
         },
-        'categorias': {
-            'type': 'array',
-            'items': {
-                'type': 'string',
-                'enum': [
-                    'Saúde',
-                    'Educação',
-                    'Transporte',
-                    'Meio Ambiente',
-                    'Urbanismo',
-                    'Assistência Social',
-                    'Tecnologia',
-                    'Segurança',
-                    'Finanças',
-                ],
+        "justificativas": {
+            "type": "array",
+            "description": "Lista dos principais argumentos do autor.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "texto_simplificado": {
+                        "type": "string",
+                        "description": "O argumento do autor em linguagem simples."
+                    },
+                    "trechos_originais": {
+                        "type": "array",
+                        "description": "Lista de strings contendo os trechos exatos da justificativa original que fundamentam esse argumento.",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["texto_simplificado", "trechos_originais"]
+            },
+        },
+        "categorias": {
+            "type": "array",
+            "description": "Lista de categorias temáticas onde o projeto se encaixa, com suas evidências no texto.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "nome": {
+                        "type": "string",
+                        "enum": [
+                            # Serviços Básicos
+                            "Saúde",
+                            "Educação",
+                            "Transporte",
+                            "Segurança",
+                            "Assistência Social",
+                    
+                            # Cidade e Ambiente
+                            "Urbanismo", # Obras, Plano Diretor, Habitação
+                            "Meio Ambiente",
+                            "Causa Animal",
+                    
+                            # Sociedade e Economia
+                            "Cultura e Turismo",
+                            "Esporte e Lazer",
+                            "Direitos Humanos",  # Mulheres, Idosos, PCDs, Minorias
+                            "Ciência e Tecnologia",
+                    
+                            # Administrativo
+                            "Orçamento e Finanças", # Ajuste para ficar claro que é dinheiro público
+                            "Servidor Público",
+                            "Homenagens/Datas Comemorativas",
+                    
+                            # Categoria "Coringa" para evitar erros
+                            "Administração Pública" # Para regras internas da câmara, burocracias gerais
+                        ],
+                    },
+                    "trechos_originais": {
+                        "type": "array",
+                        "description": "Trechos do texto que justificam por que esta categoria foi escolhida.",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["nome", "trechos_originais"]
             },
         },
     },
-    'required': ['resumo', 'justificativa', 'evidencias', 'categorias'],
+    "required": [
+        "titulo",
+        "resumo",
+        "mudancas",
+        "justificativas",
+        "categorias",
+    ],
 }
 
 
