@@ -46,6 +46,7 @@
 		"@fontsource-variable/bricolage-grotesque": "^5.2.10",
 		"date-fns": "^4.1.0",
 		"mode-watcher": "^1.1.0",
-		"pdfjs-dist": "^5.4.394"
+		"pdfjs-dist": "^5.4.394",
+		"runed": "^0.36.0"
 	}
 }
