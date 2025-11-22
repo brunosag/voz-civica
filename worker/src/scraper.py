@@ -1,24 +1,26 @@
 import contextlib
-import json
 import logging
 import re
+import sqlite3
 import time
 import unicodedata
 import urllib.parse
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-BASE_URL = 'https://www.camarapoa.rs.gov.br'
-SEARCH_ENDPOINT = 'https://www.camarapoa.rs.gov.br/processos'
-REFERER_URL = 'https://www.camarapoa.rs.gov.br/projetos'
+from db import init_db
 
-DOWNLOAD_PDFS = False
+DOWNLOAD_PDFS = True
 
+DB_FILE = Path('voz_civica.db')
 OUTPUT_DIR = Path('data')
 PDF_DIR = OUTPUT_DIR / 'pdfs'
-JSON_FILE = OUTPUT_DIR / 'projects_test.json'
+
+BASE_URL = 'https://www.camarapoa.rs.gov.br'
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,21 +33,26 @@ logger = logging.getLogger(__name__)
 class CamaraScraper:
     def __init__(self) -> None:
         self.client = httpx.Client(headers={'X-Requested-With': 'XMLHttpRequest'})
-        self.results: list[dict] = []
-        self._setup_directories()
-        if JSON_FILE.exists():
-            try:
-                with JSON_FILE.open(encoding='utf-8') as f:
-                    self.results = json.load(f)
-                logger.info('Carregados %d projetos já salvos.', len(self.results))
-            except Exception:
-                logger.exception(
-                    'Falha ao carregar arquivo JSON existente. Iniciando do zero.',
-                )
 
-    def _setup_directories(self) -> None:
-        if DOWNLOAD_PDFS:
-            PDF_DIR.mkdir(parents=True, exist_ok=True)
+        if not DB_FILE.exists():
+            init_db(DB_FILE)
+
+        self.conn = sqlite3.connect(DB_FILE)
+        self.cursor = self.conn.cursor()
+
+        self.processed_links = set()
+        try:
+            self.cursor.execute('SELECT id_externo FROM projetos')
+            rows = self.cursor.fetchall()
+            for row in rows:
+                self.processed_links.add(f'{BASE_URL}/processos/{row[0]}')
+            logger.info(
+                'Carregados %d projetos já salvos do banco.',
+                len(self.processed_links),
+            )
+        except sqlite3.OperationalError:
+            logger.exception('Erro ao ler banco de dados. As tabelas existem?')
+            raise
 
     def _dirty_clean_html(self, text: str) -> str:
         return (
@@ -81,7 +88,7 @@ class CamaraScraper:
 
             return BeautifulSoup(content, 'html.parser')
         except Exception:
-            logger.exception('Erro de conexão ao buscar Soup: %s', url)
+            logger.exception('Erro de conexão ao buscar Soup em %s', url)
             raise
 
     def _is_sidebar_article(self, article: Tag) -> bool:
@@ -104,64 +111,61 @@ class CamaraScraper:
         if 'PLL' not in title_text:
             return None
 
-        a_tag = header.find('a', href=re.compile(r'/processos/\d+$'))
-        if not a_tag:
+        if not (a_tag := header.find('a')):
             return None
 
         return urllib.parse.urljoin(BASE_URL, str(a_tag['href']))
 
-    def _process_page(self, page: int, processed_urls: set[str]) -> set[str] | None:
-        logger.info('Scraping page %d...', page)
-        params = {
-            'utf8': '✓',
-            'busca': '',
-            'tipo': 'PLL',
-            'autor': '',
-            'andamento': 'todos',
-            'aprovados_em': '',
-            'button': '',
-            'page': str(page),
-        }
-
-        soup = self._get_soup(SEARCH_ENDPOINT, params)
-        if not soup:
-            return set()
-
-        articles = soup.select('article.item')
-        if not articles:
-            logger.warning('Nenhum artigo encontrado na página %d.', page)
-            return None
-
-        new_links = set()
-        for article in articles:
-            if self._is_sidebar_article(article):
-                continue
-
-            full_link = self._extract_link_from_article(article)
-            if full_link and full_link not in processed_urls:
-                new_links.add(full_link)
-
-        return new_links
-
     def get_project_links(self, max_pages: int = 1) -> list[str]:
         logger.info('Searching for PLL projects...')
         links = set()
-        processed_urls = {p['url'] for p in self.results}
-
-        with contextlib.suppress(Exception):
-            self.client.get(REFERER_URL)
+        processed_urls = self.processed_links
 
         for page in range(1, max_pages + 1):
-            page_links = self._process_page(page, processed_urls.union(links))
-            if page_links is None:
+            logger.info('Scraping page %d...', page)
+
+            params = {
+                'utf8': '✓',
+                'busca': '',
+                'tipo': 'PLL',
+                'autor': '',
+                'andamento': 'todos',
+                'aprovados_em': '',
+                'button': '',
+                'page': str(page),
+            }
+            soup = self._get_soup(f'{BASE_URL}/processos', params)
+            if not soup:
+                continue
+
+            articles = soup.select('article.item')
+            if not articles:
+                logger.warning('Nenhum artigo encontrado na página %d.', page)
                 break
-            page_links_count = len(page_links)
-            links.update(page_links)
+
+            page_links_count = 0
+            for article in articles:
+                if self._is_sidebar_article(article):
+                    continue
+
+                full_link = self._extract_link_from_article(article)
+                if (
+                    full_link
+                    and full_link not in links
+                    and full_link not in processed_urls
+                ):
+                    links.add(full_link)
+                    page_links_count += 1
+
             logger.info(
                 'Found %d NEW valid PLL projects on page %d.',
                 page_links_count,
                 page,
             )
+
+            if page_links_count == 0:
+                pass
+
             time.sleep(0.5)
 
         all_links = list(links)
@@ -181,7 +185,7 @@ class CamaraScraper:
                     metadata[key] = dd.get_text(strip=True)
         return metadata
 
-    def _download_pdfs(self, soup: BeautifulSoup, project_id: str) -> list[dict]:
+    def _process_files(self, soup: BeautifulSoup, project_id: str) -> list[dict]:
         files = []
         if not DOWNLOAD_PDFS:
             return files
@@ -191,19 +195,18 @@ class CamaraScraper:
             return files
 
         project_pdf_dir = PDF_DIR / project_id
-        project_pdf_dir.mkdir(exist_ok=True)
-
         pdf_links = docs_container.find_all(
             'a',
             href=re.compile(r'\.pdf', re.IGNORECASE),
         )
 
         for link in pdf_links:
+            if not project_pdf_dir.exists():
+                project_pdf_dir.mkdir(parents=True, exist_ok=True)
+
             file_url = urllib.parse.urljoin(BASE_URL, str(link['href']))
             name_text = link.get_text(strip=True) or 'document'
             filename = re.sub(r'[\\/*?:"<>|]', '', name_text).strip()
-            if not filename:
-                filename = 'documento'
             if not filename.lower().endswith('.pdf'):
                 filename += '.pdf'
             save_path = project_pdf_dir / filename
@@ -216,10 +219,7 @@ class CamaraScraper:
                             f.writelines(r.iter_bytes())
                     logger.info('Downloaded: %s', filename)
                 except Exception:
-                    logger.exception(
-                        'Failed to download PDF %s',
-                        file_url,
-                    )
+                    logger.exception('Failed to download PDF %s', file_url)
 
             files.append(
                 {
@@ -230,19 +230,95 @@ class CamaraScraper:
             )
         return files
 
+    def save_project_to_db(self, data: dict):
+        try:
+            metadata = data.get('metadata', {})
+            data_abertura = None
+            if raw_data := metadata.get('data_da_abertura'):
+                with contextlib.suppress(ValueError):
+                    data_abertura = (
+                        datetime.strptime(raw_data, '%d/%m/%Y')
+                        .replace(tzinfo=UTC)
+                        .date()
+                    )
+
+            link_pdf = None
+            if data['files']:
+                link_pdf = data['files'][0].get('local_path')
+
+            # Inserir projeto
+            self.cursor.execute(
+                """
+                INSERT OR IGNORE INTO projetos (
+                    id_externo, numero_processo, tipo, ementa,
+                    data_abertura, situacao_tramitacao, situacao_plenaria,
+                    link_pdf_principal, data_ultima_tramitacao
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    data['id'],
+                    metadata.get('processo'),
+                    'PLL',
+                    None,  # O scraper atual não obtém a ementa nos metadados
+                    data_abertura,
+                    metadata.get('situacao'),
+                    metadata.get('situacao_plenaria'),
+                    link_pdf,
+                    datetime.strptime(
+                        metadata.get('ultima_tramitacao'),
+                        '%d/%m/%Y',
+                    )
+                    .replace(
+                        tzinfo=UTC,
+                    )
+                    .date()
+                    if metadata.get('ultima_tramitacao')
+                    else None,
+                ),
+            )
+
+            projeto_db_id = self.cursor.lastrowid
+
+            # Inserir autor e relacionamento
+            if projeto_db_id:
+                autores_raw = metadata.get('autores', '')
+                if autores_raw:
+                    nome_autor = autores_raw.strip().upper()
+                    self.cursor.execute(
+                        'INSERT OR IGNORE INTO autores (nome) VALUES (?)',
+                        (nome_autor,),
+                    )
+                    self.cursor.execute(
+                        'SELECT id FROM autores WHERE nome = ?',
+                        (nome_autor,),
+                    )
+                    res = self.cursor.fetchone()
+                    if res:
+                        autor_id = res[0]
+                        self.cursor.execute(
+                            'INSERT OR IGNORE INTO projetos_autores (projeto_id, autor_id) VALUES (?, ?)',
+                            (projeto_db_id, autor_id),
+                        )
+
+            self.conn.commit()
+            logger.info('Projeto %s salvo no banco.', data['id'])
+
+        except Exception:
+            logger.exception('Erro ao salvar no banco')
+            self.conn.rollback()
+
     def process_project(self, url: str):
+        if url in self.processed_links:
+            logger.info('Skipping %s (already in DB)', url)
+            return
+
         try:
             logger.info('Processing: %s', url)
-            page_headers = {
-                'User-Agent': self.client.headers['User-Agent'],
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Referer': SEARCH_ENDPOINT,
-            }
-            resp = self.client.get(url, headers=page_headers)
+            resp = self.client.get(url)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
 
-            data = {'url': url, 'id': url.split('/')[-1], 'metadata': {}}
+            data: dict[str, Any] = {'url': url, 'id': url.split('/')[-1]}
             data['metadata'] = self._extract_metadata(soup)
             data['has_votacoes'] = bool(
                 soup.find('div', attrs={'data-tab': 'votacoes'}),
@@ -250,39 +326,25 @@ class CamaraScraper:
             data['has_tramitacoes'] = bool(
                 soup.find('div', attrs={'data-tab': 'tramitacoes'}),
             )
-            data['files'] = self._download_pdfs(soup, data['id'])
+            data['files'] = self._process_files(soup, data['id'])
 
-            self.results.append(data)
+            self.save_project_to_db(data)
 
         except Exception:
             logger.exception('Failed to process %s', url)
 
-    def save_json(self):
-        # Incremental save
-        temp_file = OUTPUT_DIR / 'projects_temp.json'
-        with temp_file.open('w', encoding='utf-8') as f:
-            json.dump(self.results, f, ensure_ascii=False, indent=2)
-
-        # Atomic save
-        temp_file.replace(JSON_FILE)
-        logger.info('PROGRESS SAVED: %d projects so far.', len(self.results))
-
     def close(self):
         self.client.close()
+        self.conn.close()
 
 
 if __name__ == '__main__':
     scraper = CamaraScraper()
     try:
-        links = scraper.get_project_links(max_pages=1)
-        for i, link in enumerate(links):
+        links = scraper.get_project_links(max_pages=2)
+        for link in links:
             scraper.process_project(link)
-            if (i + 1) % 10 == 0:
-                scraper.save_json()
-            time.sleep(0.2)
-        scraper.save_json()
     except KeyboardInterrupt:
-        logger.warning('Interrompido pelo usuário. Salvando progresso...')
-        scraper.save_json()
+        logger.warning('Interrompido pelo usuário.')
     finally:
         scraper.close()
