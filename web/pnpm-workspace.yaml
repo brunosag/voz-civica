@@ -1,0 +1,6 @@
+ignoredBuiltDependencies:
+  - rollup
+
+onlyBuiltDependencies:
+  - esbuild
+  - '@tailwindcss/oxide'
