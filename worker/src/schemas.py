@@ -30,13 +30,17 @@ class TipoProjeto(StrEnum):
 
 
 class Classificacao(BaseModel):
-    categoria: Categoria
-    fontes: list[str] = Field(min_length=1)
+    #categoria: Categoria
+    nome: Categoria
+    #fontes: list[str] = Field(min_length=1)
+    trechos_originais: list[str] = Field(min_length=1)
 
 
 class PontoAnalise(BaseModel):
-    texto: str
-    fontes: list[str] = Field(min_length=1)
+    #texto: str
+    texto_simplificado: str
+    #fontes: list[str] = Field(min_length=1)
+    trechos_originais: list[str] = Field(min_length=1)
 
 
 class AnaliseIA(BaseModel):
