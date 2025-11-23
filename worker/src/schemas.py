@@ -30,22 +30,47 @@ class TipoProjeto(StrEnum):
 
 
 class Classificacao(BaseModel):
-    categoria: Categoria
-    fontes: list[str] = Field(min_length=1)
+    categoria: Categoria = Field(
+        description='A categoria temática que melhor descreve o projeto.',
+    )
+    fontes: list[str] = Field(
+        min_length=1,
+        description='Lista de trechos exatos do texto original que justificam a escolha desta categoria.',
+    )
 
 
 class PontoAnalise(BaseModel):
-    texto: str
-    fontes: list[str] = Field(min_length=1)
+    texto: str = Field(
+        description='A explicação simplificada do ponto (mudança ou justificativa) em linguagem cidadã, sem juridiquês.',
+    )
+    fontes: list[str] = Field(
+        min_length=1,
+        description='Lista de strings contendo os trechos exatos (ipsis litteris) do documento original que comprovam este ponto.',
+    )
 
 
 class AnaliseIA(BaseModel):
-    modelo: str
-    titulo: str
-    resumo: str
-    mudancas: list[PontoAnalise] = Field(min_length=1)
-    justificativas: list[PontoAnalise] = Field(min_length=1)
-    classificacao: list[Classificacao] = Field(min_length=1)
+    modelo: str = Field(
+        description='O identificador do modelo de IA utilizado.',
+    )
+    titulo: str = Field(
+        description="Título curto, chamativo e jornalístico (máx 10 palavras). Ex: 'Proibição de fogos de artifício com ruído'.",
+    )
+    resumo: str = Field(
+        description="Uma única frase simples explicando o objetivo central. Comece com verbo (ex: 'Cria', 'Proíbe').",
+    )
+    mudancas: list[PontoAnalise] = Field(
+        min_length=1,
+        description="Lista de mudanças práticas na vida do cidadão. Foco no 'o que muda amanhã'.",
+    )
+    justificativas: list[PontoAnalise] = Field(
+        min_length=1,
+        description='Lista dos principais argumentos do autor para propor a lei.',
+    )
+    classificacao: list[Classificacao] = Field(
+        min_length=1,
+        description='Classificação temática do projeto baseada em evidências no texto.',
+    )
 
 
 class Autor(BaseModel):
