@@ -1,13 +1,13 @@
 from datetime import datetime, date
-from sqlalchemy import Integer, String, Date, DateTime, JSON, ForeignKey, Table
+from sqlalchemy import Integer, String, Date, DateTime, JSON, ForeignKey, Table, Column
 from sqlalchemy.orm import relationship, Mapped, mapped_column
-from .database import Base
+from database import Base
 
 projeto_autor = Table(
     "projetos_autores",
     Base.metadata,
-    mapped_column("projeto_id", ForeignKey("projetos.id"), primary_key=True),
-    mapped_column("autor_id", ForeignKey("autores.id"), primary_key=True),
+    Column("projeto_id", ForeignKey("projetos.id"), primary_key=True),
+    Column("autor_id", ForeignKey("autores.id"), primary_key=True),
 )
 
 class Autor(Base):

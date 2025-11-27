@@ -12,8 +12,8 @@ from bs4 import BeautifulSoup, Tag
 from sqlalchemy.orm import Session
 
 try:
-    from .database import SessionLocal, engine, Base
-    from .models import Projeto, Autor, Anexo
+    from database import SessionLocal, engine, Base
+    from models import Projeto, Autor, Anexo
 except ImportError:
     from database import SessionLocal, engine, Base
     from models import Projeto, Autor, Anexo
