@@ -47,6 +47,7 @@
 		"date-fns": "^4.1.0",
 		"mode-watcher": "^1.1.0",
 		"pdfjs-dist": "^5.4.394",
-		"runed": "^0.36.0"
+		"runed": "^0.36.0",
+		"valibot": "^1.2.0"
 	}
 }

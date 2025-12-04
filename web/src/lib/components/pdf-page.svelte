@@ -1,26 +1,40 @@
 <script lang="ts">
-	import type { PDFDocumentProxy } from 'pdfjs-dist';
-	import { PdfPageRenderer } from './pdf-page-renderer.svelte';
+	import type { PDFPageProxy } from 'pdfjs-dist';
+	import 'pdfjs-dist/web/pdf_viewer.css';
+	import { TextLayerBuilder } from 'pdfjs-dist/web/pdf_viewer.mjs';
+	import { resource } from 'runed';
 
-	interface Props {
-		pdfDoc: PDFDocumentProxy;
-		pageNum: number;
-		searchStrings?: string[];
-	}
+	let { page, searchStrings = [] }: { page: PDFPageProxy; searchStrings?: string[] } = $props();
 
-	let { pdfDoc, pageNum, searchStrings = [] }: Props = $props();
-	let canvas: HTMLCanvasElement | undefined = $state();
-	let textLayer: HTMLDivElement | undefined = $state();
+	let containerEl: HTMLDivElement | undefined = $state();
+	let canvasEl: HTMLCanvasElement | undefined = $state();
+	let containerWidth: number | undefined = $state();
 
-	$effect(() => {
-		if (pdfDoc && canvas && textLayer) {
-			const renderer = new PdfPageRenderer(pdfDoc, pageNum);
-			renderer.render(canvas, textLayer, searchStrings);
-		}
-	});
+	const render = async (canvas: HTMLCanvasElement, container: HTMLDivElement, width: number) => {
+		const baseWidth = page.getViewport({ scale: 1 }).width;
+		const scale = width / baseWidth;
+		const viewport = page.getViewport({ scale });
+		canvas.height = viewport.height;
+		canvas.width = viewport.width;
+		await page.render({ canvas, viewport }).promise;
+
+		const textLayerBuilder = new TextLayerBuilder({ pdfPage: page });
+		await textLayerBuilder.render({ viewport });
+		textLayerBuilder.div.style.setProperty('--total-scale-factor', String(scale));
+		container.appendChild(textLayerBuilder.div);
+	};
+
+	const renderingResource = resource(
+		() => containerWidth,
+		async () => {
+			if (canvasEl && containerEl && containerWidth) {
+				await render(canvasEl, containerEl, containerWidth);
+			}
+		},
+		{ debounce: 300 }
+	);
 </script>
 
-<div class="relative mb-4 inline-block shadow-md">
-	<canvas bind:this={canvas} class="block"></canvas>
-	<div bind:this={textLayer} class="absolute inset-0 overflow-hidden leading-none"></div>
+<div bind:this={containerEl} bind:clientWidth={containerWidth} class="relative w-full">
+	<canvas bind:this={canvasEl}></canvas>
 </div>
